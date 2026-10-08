@@ -1,0 +1,16 @@
+# Secrets: never upload these
+.env
+.streamlit/secrets.toml
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store

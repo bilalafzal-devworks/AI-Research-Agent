@@ -1,0 +1,4 @@
+crewai[litellm]==1.15.4
+streamlit==1.57.0
+ddgs==9.16.0
+python-dotenv==1.2.4
