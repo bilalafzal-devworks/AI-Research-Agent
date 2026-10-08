@@ -12,8 +12,12 @@ from crewai import Agent, Crew, LLM, Task
 from crewai.tools import tool
 from ddgs import DDGS
 
-# The Groq model ID. The "groq/" prefix tells CrewAI to send the request to Groq.
-GROQ_MODEL = "groq/openai/gpt-oss-120b"
+# Groq's OpenAI-compatible API address.
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+# Groq's model ID is "openai/gpt-oss-120b". The extra "openai/" in front tells CrewAI
+# to use its OpenAI-compatible provider, which sends requests to GROQ_BASE_URL.
+GROQ_MODEL = "openai/openai/gpt-oss-120b"
 
 
 @tool
@@ -44,8 +48,11 @@ def run_research(topic: str, api_key: str) -> str:
     """Run the single-agent research crew and return the report as Markdown text."""
 
     # The LLM object tells CrewAI which model to use and how to authenticate.
+    # We use CrewAI's OpenAI-compatible route instead of LiteLLM, because the LiteLLM
+    # route sends an extra field ("cache_breakpoint") that Groq rejects.
     llm = LLM(
         model=GROQ_MODEL,
+        base_url=GROQ_BASE_URL,  # send requests to Groq instead of OpenAI
         api_key=api_key,
         temperature=0.3,  # lower = more factual, less creative
     )
