@@ -1,152 +1,63 @@
-"""Streamlit interface for the RAG app."""
-import logging
+"""
+app.py
+
+The Streamlit web page. It collects the topic from the user, calls the
+research agent in research_agent.py, and displays the report.
+
+Run locally with:   streamlit run app.py
+"""
+
+import os
 
 import streamlit as st
+from dotenv import load_dotenv
 
-from src.config import DEFAULT_TOP_K, RAGError, get_secret
-from src.rag import MODE_DOCS, MODE_HYBRID, MODE_LLM, answer_question, index_document
-from src.vector_store import VectorStore
+from research_agent import run_research
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Reads a local .env file (if it exists) and puts its values into environment variables.
+# On Streamlit Community Cloud there is no .env file, so this simply does nothing there.
+load_dotenv()
 
-st.set_page_config(page_title="Document Q&A (RAG)", page_icon="📄", layout="wide")
 
-# ---------- Session state (each visitor gets their own database) ----------
-if "store" not in st.session_state:
+def get_groq_api_key():
+    """Find the Groq API key.
+    - On Streamlit Community Cloud: read it from the app's Secrets.
+    - On your computer: read it from the .env file (via os.getenv).
+    """
     try:
-        st.session_state.store = VectorStore()
-    except RAGError as e:
-        st.error(str(e))
-        st.stop()
-st.session_state.setdefault("docs", {})       # filename -> number of chunks
-st.session_state.setdefault("messages", [])   # chat history shown on screen
-store = st.session_state.store
+        return st.secrets["GROQ_API_KEY"]
+    except Exception:
+        return os.getenv("GROQ_API_KEY")
 
 
-def show_sources(hits):
-    with st.expander(f"📚 Sources used ({len(hits)} chunks)"):
-        for rank, h in enumerate(hits, start=1):
-            meta = h["metadata"]
-            st.markdown(
-                f"**#{rank} · {meta['source']} · chunk {meta['chunk_index']} · distance {h['distance']:.3f}**"
-            )
-            st.text(h["text"])
+# ----- Page layout -----
+st.set_page_config(page_title="AI Research Agent", page_icon="🔎")
+st.title("🔎 AI Research Agent")
+st.write("Type a topic. The agent will search the web, analyze what it finds, and write a report.")
 
+topic = st.text_input("Research topic", placeholder="e.g. Solar energy adoption in Pakistan in 2026")
 
-# ---------- Sidebar ----------
-with st.sidebar:
-    st.header("⚙️ Setup")
+# st.button returns True only on the run where the button was clicked.
+if st.button("Start research", type="primary"):
+    api_key = get_groq_api_key()
 
-    st.subheader("API status")
-    groq_ok = bool(get_secret("GROQ_API_KEY"))
-    hf_ok = bool(get_secret("HF_TOKEN"))
-    st.write(("✅" if groq_ok else "❌") + " Groq API key")
-    st.write(("✅" if hf_ok else "❌") + " Hugging Face token")
-    if not (groq_ok and hf_ok):
-        st.warning("Add the missing key(s) in your .env file (local) or Streamlit Secrets (cloud).")
-
-    st.divider()
-    st.subheader("Document")
-    uploaded = st.file_uploader("Upload a PDF, TXT or DOCX", type=["pdf", "txt", "docx"])
-    process_clicked = st.button("Process document", type="primary")
-
-    if process_clicked:
-        if uploaded is None:
-            st.warning("Choose a file first.")
-        else:
+    if not topic.strip():
+        st.warning("Please enter a topic first.")
+    elif not api_key:
+        st.error("No GROQ_API_KEY found. Add it to your .env file (local) or Streamlit Secrets (cloud).")
+    else:
+        # st.spinner shows a loading message while the agent works.
+        with st.spinner("The agent is searching and writing. This can take a minute..."):
             try:
-                with st.spinner("Reading, chunking and embedding..."):
-                    n_chunks = index_document(store, uploaded.name, uploaded.getvalue())
-                st.session_state.docs[uploaded.name] = n_chunks
-                st.success(f"Processed '{uploaded.name}' into {n_chunks} chunks.")
-            except RAGError as e:
-                st.error(str(e))
-            except Exception:
-                logger.exception("Unexpected error while processing document")
-                st.error("Something unexpected went wrong while processing. Check the app logs.")
-
-    st.divider()
-    st.subheader("Answer mode")
-    MODES = {
-        "📄 Documents only": MODE_DOCS,
-        "📄 + 🤖 Documents, then AI knowledge": MODE_HYBRID,
-        "🤖 AI only (ignore documents)": MODE_LLM,
-    }
-    mode_label = st.radio(
-        "Where should answers come from?",
-        list(MODES),
-        help="Documents only: strict, says 'not found' if the file has no answer. "
-             "Documents, then AI knowledge: uses your file first and falls back to the AI's own knowledge. "
-             "AI only: a normal chatbot that ignores your file.",
-    )
-    mode = MODES[mode_label]
-
-    st.divider()
-    st.subheader("Retrieval settings")
-    top_k = st.slider("Chunks to retrieve (top_k)", 1, 10, DEFAULT_TOP_K)
-    use_threshold = st.checkbox("Ignore weak matches", help="Drops chunks that are too far from the question.")
-    max_distance = st.slider(
-        "Max distance", 0.2, 1.5, 0.8, 0.05,
-        disabled=not use_threshold,
-        help="Lower = stricter. Compare the distances shown under 'Sources used' to pick a value.",
-    )
-
-    st.divider()
-    if st.button("🗑️ Clear database & chat"):
-        try:
-            store.reset()
-        except RAGError as e:
-            st.error(str(e))
-        st.session_state.docs = {}
-        st.session_state.messages = []
-        st.rerun()
-
-# ---------- Main page ----------
-st.title("📄 Document Q&A with RAG")
-st.write(
-    "Upload a document, process it, then ask questions. Answers are generated by a Groq-hosted LLM "
-    "using only the most relevant parts of your document, retrieved from ChromaDB."
-)
-
-if st.session_state.docs:
-    names = ", ".join(f"**{n}** ({c} chunks)" for n, c in st.session_state.docs.items())
-    st.success(f"Ready: {names}")
-elif mode == MODE_DOCS:
-    st.info("No document processed yet. Upload a file in the sidebar and click **Process document**.")
-
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg.get("hits"):
-            show_sources(msg["hits"])
-
-question = st.chat_input(
-    "Ask a question..." if mode != MODE_DOCS else "Ask a question about your documents...",
-    disabled=(mode == MODE_DOCS and not st.session_state.docs),
-)
-
-if question:
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
-
-    with st.chat_message("assistant"):
-        try:
-            with st.spinner("Thinking..."):
-                result = answer_question(
-                    question, store, top_k=top_k,
-                    max_distance=max_distance if use_threshold else None,
-                    mode=mode,
+                report = run_research(topic.strip(), api_key)
+            except Exception as error:
+                st.error(f"Something went wrong: {error}")
+            else:
+                st.success("Report ready!")
+                st.markdown(report)
+                st.download_button(
+                    label="Download report (.md)",
+                    data=report,
+                    file_name="research_report.md",
+                    mime="text/markdown",
                 )
-            st.markdown(result["answer"])
-            if result["hits"]:
-                show_sources(result["hits"])
-            st.session_state.messages.append(
-                {"role": "assistant", "content": result["answer"], "hits": result["hits"]}
-            )
-        except RAGError as e:
-            st.error(str(e))
-        except Exception:
-            logger.exception("Unexpected error while answering")
-            st.error("Something unexpected went wrong. Check the app logs and try again.")
